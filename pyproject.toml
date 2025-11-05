@@ -1,0 +1,15 @@
+[project]
+name = "nba-sharp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.121.0",
+    "nba-api>=1.10.2",
+    "sqlalchemy>=2.0.44",
+    "pandas>=2.2.0",
+    "uvicorn[standard]>=0.30.0",
+    "psycopg[binary]>=3.2.1",
+    "psycopg2>=2.9.11",
+]
