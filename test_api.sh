@@ -19,11 +19,19 @@ curl -s "$BASE_URL/api/v1/scheduler/status" | python -m json.tool
 echo ""
 echo ""
 
-# Trigger database update
-echo "3. Trigger Database Update"
+# Trigger database update (with date)
+echo "3. Trigger Database Update (with specific date)"
 curl -s -X POST "$BASE_URL/api/v1/admin/update-database" \
   -H "Content-Type: application/json" \
   -d "{\"date\": \"$DATE\"}" | python -m json.tool
+echo ""
+echo ""
+
+# Trigger database update (for today)
+echo "3b. Trigger Database Update (for today)"
+curl -s -X POST "$BASE_URL/api/v1/admin/update-database" \
+  -H "Content-Type: application/json" \
+  -d "{}" | python -m json.tool
 echo ""
 echo ""
 

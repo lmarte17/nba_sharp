@@ -69,6 +69,13 @@ class TaskStatus(BaseModel):
 class DateParam(BaseModel):
     """Date parameter for endpoints"""
     date: Optional[str] = None  # YYYY-MM-DD format
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "date": "2024-11-05"
+            }
+        }
 
 
 # ============================================================================
@@ -148,9 +155,12 @@ async def run_player_projections(date_str: Optional[str] = None):
         
         from analysis.player_proj import build_projections, save_projections
         
-        # Determine date
-        if date_str:
-            game_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        # Determine date with validation
+        if date_str and date_str.strip():
+            try:
+                game_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError as e:
+                raise ValueError(f"Invalid date format: {date_str}. Use YYYY-MM-DD format (e.g., 2024-11-05)")
         else:
             game_date = datetime.date.today()
         
@@ -301,12 +311,17 @@ async def get_player_stats(
 @app.post("/api/v1/admin/update-database", response_model=TaskStatus)
 async def trigger_database_update(
     background_tasks: BackgroundTasks,
-    params: DateParam
+    params: DateParam = DateParam()
 ):
     """
     Manually trigger database update.
     
     Runs: python -m db.run_daily_update
+    
+    Request body (optional):
+    {
+        "date": "2024-11-05"  // Optional, YYYY-MM-DD format. Omit or use {} for today.
+    }
     """
     background_tasks.add_task(run_daily_update, params.date)
     
@@ -321,12 +336,17 @@ async def trigger_database_update(
 @app.post("/api/v1/admin/calculate-matchups", response_model=TaskStatus)
 async def trigger_matchup_calculation(
     background_tasks: BackgroundTasks,
-    params: DateParam
+    params: DateParam = DateParam()
 ):
     """
     Manually trigger game matchup calculations.
     
     Runs: python -m analysis.game_matchup
+    
+    Request body (optional):
+    {
+        "date": "2024-11-05"  // Optional, YYYY-MM-DD format. Omit or use {} for today.
+    }
     """
     background_tasks.add_task(run_game_matchup, params.date)
     
@@ -349,6 +369,11 @@ async def trigger_player_projections(
     Runs: python -m analysis.player_proj --save-to-db
     
     Requires daily_proj.csv to be uploaded first.
+    
+    Request body:
+    {
+        "date": "2024-11-05"  // Optional, YYYY-MM-DD format. Omit for today.
+    }
     """
     if not DAILY_PROJ_PATH.exists():
         raise HTTPException(
@@ -356,12 +381,23 @@ async def trigger_player_projections(
             detail=f"daily_proj.csv not found. Upload it first at /api/v1/admin/upload-daily-csv"
         )
     
-    background_tasks.add_task(run_player_projections, params.date)
+    # Validate date format if provided
+    date_to_use = params.date
+    if date_to_use and date_to_use.strip():
+        try:
+            datetime.datetime.strptime(date_to_use, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format: '{date_to_use}'. Use YYYY-MM-DD format (e.g., 2024-11-05)"
+            )
+    
+    background_tasks.add_task(run_player_projections, date_to_use)
     
     return TaskStatus(
         task="player_projections",
         status="started",
-        message=f"Player projections started for date: {params.date or 'today'}",
+        message=f"Player projections started for date: {date_to_use or 'today'}",
         started_at=datetime.datetime.now().isoformat()
     )
 
@@ -369,12 +405,17 @@ async def trigger_player_projections(
 @app.post("/api/v1/admin/run-full-pipeline", response_model=TaskStatus)
 async def trigger_full_pipeline(
     background_tasks: BackgroundTasks,
-    params: DateParam
+    params: DateParam = DateParam()
 ):
     """
     Run the complete pipeline: database update + matchup calculations.
     
     This is what runs automatically at noon EST.
+    
+    Request body (optional):
+    {
+        "date": "2024-11-05"  // Optional, YYYY-MM-DD format. Omit or use {} for today.
+    }
     """
     background_tasks.add_task(run_full_pipeline, params.date)
     
