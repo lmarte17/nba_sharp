@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Dict, Optional
 import sys
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 import pandas as pd
 import numpy as np
 
@@ -612,7 +614,8 @@ def build_projections(
     daily_proj_path: Path,
     game_date: datetime.date,
     database_url: Optional[str] = None,
-    save_to_db: bool = False
+    save_to_db: bool = False,
+    game_date_tz: str = "America/New_York",
 ) -> pd.DataFrame:
     """
     Main function to build player projections.
@@ -626,7 +629,23 @@ def build_projections(
     Returns:
         DataFrame with complete projections
     """
-    print(f"Building player projections for {game_date}")
+    try:
+        input_tz = ZoneInfo(game_date_tz)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Invalid timezone '{game_date_tz}' for build_projections: {exc}") from exc
+    
+    est_tz = ZoneInfo("America/New_York")
+    game_date_dt = datetime.datetime.combine(game_date, datetime.time(0, 0))
+    game_date_dt = game_date_dt.replace(tzinfo=input_tz)
+    game_date_est = game_date_dt.astimezone(est_tz).date()
+    
+    if game_date_est != game_date:
+        print(
+            f"Interpreting provided date {game_date} in {game_date_tz}; "
+            f"using {game_date_est} America/New_York for matchup lookups."
+        )
+    else:
+        print(f"Building player projections for {game_date_est}")
     
     # Load daily projections
     print("Loading daily projections CSV...")
@@ -634,7 +653,8 @@ def build_projections(
     print(f"Loaded {len(df)} players")
     
     # Add game date column
-    df['game_date'] = game_date
+    df['game_date'] = game_date_est
+    df.attrs['game_date_est'] = game_date_est
     
     # Connect to database
     engine = get_engine(database_url)
@@ -649,10 +669,10 @@ def build_projections(
         team_dfs = load_all_team_stats(session)
         
         print("Loading game matchup data...")
-        matchup_df = load_game_matchup_dataframe(session, game_date)
+        matchup_df = load_game_matchup_dataframe(session, game_date_est)
         
         if matchup_df.empty:
-            print(f"Warning: No matchup data found for {game_date}")
+            print(f"Warning: No matchup data found for {game_date_est}")
             print("Run game_matchup.py first to generate matchup data")
     
     # Merge player stats
@@ -738,6 +758,11 @@ def main() -> None:
         help="Game date in YYYY-MM-DD format (default: today)",
     )
     parser.add_argument(
+        "--tz",
+        default="America/New_York",
+        help="Timezone to interpret today's date when --date is omitted (default: America/New_York)",
+    )
+    parser.add_argument(
         "--csv",
         default=None,
         help="Path to daily_proj.csv (default: analysis/daily_player_intake/daily_proj.csv)",
@@ -760,11 +785,21 @@ def main() -> None:
     
     args = parser.parse_args()
     
+    try:
+        tzinfo = ZoneInfo(args.tz)
+    except ZoneInfoNotFoundError as exc:
+        print(f"Error: Invalid timezone '{args.tz}': {exc}")
+        sys.exit(1)
+    
     # Determine date
     if args.date:
-        game_date = datetime.datetime.strptime(args.date, "%Y-%m-%d").date()
+        try:
+            game_date = datetime.datetime.strptime(args.date, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"Error: Invalid date format '{args.date}'. Expected YYYY-MM-DD.")
+            sys.exit(1)
     else:
-        game_date = datetime.date.today()
+        game_date = datetime.datetime.now(tz=tzinfo).date()
     
     # Determine CSV path
     if args.csv:
@@ -778,15 +813,23 @@ def main() -> None:
         print(f"Error: CSV file not found at {csv_path}")
         sys.exit(1)
     
+    # Build projections
+    df = build_projections(
+        csv_path,
+        game_date,
+        args.database_url,
+        args.save_to_db,
+        game_date_tz=args.tz,
+    )
+    
+    effective_date = df.attrs.get('game_date_est', game_date)
+    
     # Determine output path
     if args.output:
         output_path = Path(args.output)
     else:
         script_dir = Path(__file__).parent
-        output_path = script_dir / "daily_player_intake" / f"player_projections_{game_date}.csv"
-    
-    # Build projections
-    df = build_projections(csv_path, game_date, args.database_url, args.save_to_db)
+        output_path = script_dir / "daily_player_intake" / f"player_projections_{effective_date}.csv"
     
     # Save projections to CSV
     save_projections(df, output_path)

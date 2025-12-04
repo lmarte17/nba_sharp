@@ -13,6 +13,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -24,6 +25,9 @@ import json
 
 from stats_retrieval.fetch_and_merge_player_stats import fetch_and_merge_player_stats
 from stats_retrieval.fetch_and_merge_team_stats import fetch_and_merge_team_stats
+from sqlalchemy import select
+from db.database import get_engine, get_session_maker
+from db.models import PlayerProjection
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +38,19 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+DEFAULT_TZ_NAME = os.getenv("NBA_SHARP_TZ", "America/New_York")
+try:
+    DEFAULT_TZ = ZoneInfo(DEFAULT_TZ_NAME)
+except ZoneInfoNotFoundError:
+    fallback_tz = "America/New_York"
+    logger.warning(
+        "NBA_SHARP_TZ '%s' is invalid; falling back to %s",
+        DEFAULT_TZ_NAME,
+        fallback_tz,
+    )
+    DEFAULT_TZ_NAME = fallback_tz
+    DEFAULT_TZ = ZoneInfo(fallback_tz)
 
 # FastAPI app
 app = FastAPI(
@@ -128,6 +145,9 @@ async def run_game_matchup(date_str: Optional[str] = None):
         args = ["game_matchup"]
         if date_str:
             args.extend(["--date", date_str])
+        else:
+            target_date = datetime.datetime.now(tz=DEFAULT_TZ).strftime("%Y-%m-%d")
+            args.extend(["--date", target_date])
         if DATABASE_URL:
             args.extend(["--database-url", DATABASE_URL])
         
@@ -162,7 +182,7 @@ async def run_player_projections(date_str: Optional[str] = None):
             except ValueError as e:
                 raise ValueError(f"Invalid date format: {date_str}. Use YYYY-MM-DD format (e.g., 2024-11-05)")
         else:
-            game_date = datetime.date.today()
+            game_date = datetime.datetime.now(tz=DEFAULT_TZ).date()
         
         # Build projections
         loop = asyncio.get_event_loop()
@@ -172,11 +192,13 @@ async def run_player_projections(date_str: Optional[str] = None):
             DAILY_PROJ_PATH,
             game_date,
             DATABASE_URL,
-            True  # save_to_db=True
+            True,  # save_to_db=True
+            DEFAULT_TZ_NAME,
         )
         
         # Save to CSV
-        output_path = DAILY_PROJ_DIR / f"player_projections_{game_date}.csv"
+        effective_date = df.attrs.get('game_date_est', game_date)
+        output_path = DAILY_PROJ_DIR / f"player_projections_{effective_date}.csv"
         await loop.run_in_executor(None, save_projections, df, output_path)
         
         logger.info(f"Player projections completed successfully. Processed {len(df)} players")
@@ -251,6 +273,58 @@ async def health_check():
 # ============================================================================
 # Stats Endpoints (existing)
 # ============================================================================
+
+@app.get("/api/projections")
+async def get_player_projections(
+    date: Optional[str] = None,
+    limit: int = 1000,
+    offset: int = 0,
+):
+    """Retrieve player projections from analysis.player_projection."""
+    try:
+        if not DATABASE_URL:
+            raise HTTPException(status_code=503, detail="Database not configured (missing DATABASE_URL)")
+        
+        # Validate date if provided
+        game_date: Optional[datetime.date] = None
+        if date and date.strip():
+            try:
+                game_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid date format: '{date}'. Use YYYY-MM-DD format (e.g., 2024-11-05)",
+                )
+        
+        # Create session per request
+        engine = get_engine(DATABASE_URL)
+        SessionLocal = get_session_maker(engine)
+        with SessionLocal() as session:
+            stmt = select(PlayerProjection)
+            if game_date is not None:
+                stmt = stmt.where(PlayerProjection.game_date == game_date)
+            stmt = stmt.offset(max(offset, 0)).limit(max(limit, 1))
+            result = session.execute(stmt)
+            rows = result.scalars().all()
+            
+            # Serialize ORM rows to JSON-compatible dicts
+            columns = [col.name for col in PlayerProjection.__table__.columns]
+            serialized = []
+            for row in rows:
+                record = {}
+                for col in columns:
+                    value = getattr(row, col)
+                    if isinstance(value, (datetime.date, datetime.datetime)):
+                        value = value.isoformat()
+                    record[col] = value
+                serialized.append(record)
+            
+            return JSONResponse(content=serialized)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
+
 
 @app.get("/api/v1/stats/teams")
 async def get_team_stats(

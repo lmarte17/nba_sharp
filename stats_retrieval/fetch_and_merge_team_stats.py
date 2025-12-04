@@ -5,7 +5,7 @@ import time
 import datetime
 from sqlalchemy import create_engine
 
-def fetch_and_merge_team_stats(season='2024-25', season_type='Regular Season', per_mode='PerGame', last_n_games=0):
+def fetch_and_merge_team_stats(season='2025-26', season_type='Regular Season', per_mode='PerGame', last_n_games=0):
     """
     Fetches team stats from multiple endpoints and merges them.
 

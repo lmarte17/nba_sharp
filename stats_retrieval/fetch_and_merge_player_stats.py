@@ -4,7 +4,7 @@ import datetime
 from sqlalchemy import create_engine
 from nba_api.stats.endpoints import leaguedashplayerstats, leaguedashptstats
 
-def fetch_and_merge_player_stats(season='2024-25', season_type='Regular Season', per_mode='PerGame', last_n_games=0):
+def fetch_and_merge_player_stats(season='2025-26', season_type='Regular Season', per_mode='PerGame', last_n_games=0):
     """
     Fetches all player stats from multiple endpoints and merges them to fit the schema.
     
